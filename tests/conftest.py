@@ -15,7 +15,7 @@ def api_key():
 @pytest.fixture
 def client():
     """FastAPI test client"""
-    from src.main import app
+    from main import app
 
     return TestClient(app)
 

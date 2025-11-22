@@ -10,13 +10,13 @@ class TestDockerManager:
 
     def test_docker_manager_import(self):
         """Test that DockerManager can be imported"""
-        from src.core.docker_manager import DockerManager
+        from core.docker_manager import DockerManager
 
         assert DockerManager is not None
 
     def test_docker_manager_instantiation(self):
         """Test that DockerManager can be instantiated"""
-        from src.core.docker_manager import DockerManager
+        from core.docker_manager import DockerManager
 
         try:
             manager = DockerManager()
@@ -27,7 +27,7 @@ class TestDockerManager:
 
     def test_docker_connection(self):
         """Test Docker daemon connection"""
-        from src.core.docker_manager import DockerManager
+        from core.docker_manager import DockerManager
 
         try:
             manager = DockerManager()
