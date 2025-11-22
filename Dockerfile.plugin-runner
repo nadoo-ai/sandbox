@@ -1,0 +1,77 @@
+# ============================================
+# Nadoo Plugin Runner - Secure Execution Environment
+#
+# This container is used to execute untrusted plugin code
+# with maximum isolation and security
+# ============================================
+
+FROM python:3.11-slim
+
+# Security: Create non-root user with minimal permissions
+RUN groupadd -r plugin && \
+    useradd -r -g plugin -u 1000 -d /plugin -s /bin/false plugin
+
+# Install minimal required packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Install Python dependencies
+# RestrictedPython for safe code execution
+RUN pip install --no-cache-dir \
+    RestrictedPython==6.2 \
+    httpx==0.25.2 \
+    pydantic==2.5.3 \
+    pyyaml==6.0.1
+
+# Install nadoo-plugin-sdk
+# TODO: Replace with actual PyPI package when published
+# For now, assume it's installed from local build
+COPY --chown=plugin:plugin nadoo_plugin_sdk*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/nadoo_plugin_sdk*.whl && \
+    rm /tmp/nadoo_plugin_sdk*.whl
+
+# Set working directory
+WORKDIR /plugin
+
+# Create required directories with restricted permissions
+RUN mkdir -p /plugin/workspace /plugin/logs && \
+    chown -R plugin:plugin /plugin && \
+    chmod 755 /plugin && \
+    chmod 700 /plugin/workspace /plugin/logs
+
+# Security configurations
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/plugin \
+    # Prevent Python from loading user site packages
+    PYTHONNOUSERSITE=1 \
+    # Disable pip operations
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Resource limits (enforced by Docker)
+ENV PLUGIN_MAX_MEMORY=256m \
+    PLUGIN_MAX_CPU=0.5 \
+    PLUGIN_TIMEOUT=30
+
+# Copy plugin execution wrapper
+COPY --chown=plugin:plugin scripts/plugin_wrapper.py /plugin/wrapper.py
+
+# Security: Set read-only filesystem (plugins copied at runtime via volume)
+# Plugins will be mounted at /plugin/code as read-only
+
+# Switch to non-root user
+USER plugin
+
+# Default command (overridden at runtime)
+CMD ["python", "/plugin/wrapper.py"]
+
+# Security labels
+LABEL security.restricted-python="true" \
+      security.no-network="true" \
+      security.read-only-root="true" \
+      maintainer="Nadoo Team <dev@nadoo.ai>" \
+      version="1.0.0" \
+      description="Nadoo Plugin Runner - Secure plugin execution container"

@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # Sandbox API Service
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nadoo-sandbox:latest
+    container_name: nadoo-sandbox
+    ports:
+      - "8002:8002"
+    volumes:
+      # Docker socket for spawning plugin containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent storage for execution logs
+      - ./data/logs:/app/logs
+      # Persistent storage for temp files
+      - ./data/temp:/tmp/nadoo_sandbox
+    environment:
+      # Application
+      NADOO_SANDBOX_APP_NAME: "Nadoo Sandbox Service"
+      NADOO_SANDBOX_DEBUG: "false"
+
+      # Server
+      NADOO_SANDBOX_HOST: "0.0.0.0"
+      NADOO_SANDBOX_PORT: "8002"
+
+      # Security
+      NADOO_SANDBOX_SECRET_KEY: "${SANDBOX_SECRET_KEY:-change-me-in-production}"
+      NADOO_SANDBOX_API_KEY: "${SANDBOX_API_KEY:-dev-api-key}"
+
+      # Docker
+      NADOO_SANDBOX_DOCKER_SOCKET: "unix:///var/run/docker.sock"
+      NADOO_SANDBOX_MAX_EXECUTION_TIME: "60"
+      NADOO_SANDBOX_MAX_MEMORY: "512m"
+      NADOO_SANDBOX_MAX_CPU: "0.5"
+
+      # Redis (optional, for async execution tracking)
+      NADOO_SANDBOX_REDIS_URL: "${REDIS_URL:-redis://redis:6379/2}"
+    networks:
+      - nadoo-network
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    # Note: Requires access to docker.sock, which needs careful security consideration
+
+  # Redis for async execution tracking
+  redis:
+    image: redis:7-alpine
+    container_name: nadoo-sandbox-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - nadoo-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: redis-server --appendonly yes
+
+  # Plugin Runner (pre-built image, used by sandbox service)
+  plugin-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.plugin-runner
+    image: nadoo-plugin-runner:latest
+    # This service is not run directly, it's spawned by the sandbox service
+    # We just build the image here
+    profiles:
+      - build-only
+    networks:
+      - nadoo-network
+
+networks:
+  nadoo-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  redis-data:
+    driver: local
