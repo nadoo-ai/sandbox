@@ -8,7 +8,6 @@ import tempfile
 import os
 from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
-import aiofiles
 import logging
 
 from .config import get_settings

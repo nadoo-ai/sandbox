@@ -1,11 +1,11 @@
 """
 Nadoo Sandbox Service - Secure code execution environment
 """
-import os
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import docker.errors
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -15,6 +15,8 @@ import uvicorn
 
 from core.config import get_settings
 from core.docker_manager import DockerManager
+from core.executor_setup import setup_executors, cleanup_executors
+from core.executor import ExecutorRegistry
 from api import execute
 
 # Configure logging
@@ -27,12 +29,16 @@ logger = logging.getLogger(__name__)
 # Get settings
 settings = get_settings()
 
-# Initialize Docker manager
+# Initialize Docker manager (legacy, for backward compatibility)
 docker_manager = DockerManager()
+
+# Global executor client
+executor_client = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
+    global executor_client
 
     # Startup
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
@@ -44,19 +50,36 @@ async def lifespan(app: FastAPI):
     # Create temp directory
     Path(settings.temp_dir).mkdir(parents=True, exist_ok=True)
 
-    # Pre-pull Docker images
-    logger.info("Pre-pulling Docker images...")
-    for language, image in settings.language_images.items():
+    # Initialize Executor system (Warm Pool)
+    if settings.warm_pool_enabled:
+        logger.info("Initializing Executor system with Warm Pool...")
         try:
-            docker_manager.client.images.get(image)
-            logger.info(f"Image {image} already exists")
-        except:
-            logger.info(f"Pulling image {image} for {language}...")
+            executor_client = await setup_executors(settings)
+            logger.info("Executor system initialized successfully")
+        except docker.errors.DockerException as e:
+            logger.error(f"Docker not available: {e}")
+            logger.info("Falling back to legacy Docker manager")
+        except RuntimeError as e:
+            logger.error(f"Executor setup failed: {e}")
+            logger.info("Falling back to legacy Docker manager")
+        except Exception as e:
+            logger.error(f"Failed to initialize Executor system: {e}", exc_info=True)
+            logger.info("Falling back to legacy Docker manager")
+    else:
+        # Pre-pull Docker images (legacy mode)
+        logger.info("Warm Pool disabled, using legacy Docker manager")
+        logger.info("Pre-pulling Docker images...")
+        for language, image in settings.language_images.items():
             try:
-                docker_manager.client.images.pull(image)
-                logger.info(f"Successfully pulled {image}")
-            except Exception as e:
-                logger.warning(f"Failed to pull {image}: {e}")
+                docker_manager.client.images.get(image)
+                logger.info(f"Image {image} already exists")
+            except Exception:
+                logger.info(f"Pulling image {image} for {language}...")
+                try:
+                    docker_manager.client.images.pull(image)
+                    logger.info(f"Successfully pulled {image}")
+                except Exception as e:
+                    logger.warning(f"Failed to pull {image}: {e}")
 
     yield
 
@@ -67,14 +90,19 @@ async def lifespan(app: FastAPI):
     from core.posthog_client import PostHogClient
     PostHogClient.shutdown()
 
-    # Cleanup containers
+    # Cleanup Executor system
+    if executor_client:
+        logger.info("Cleaning up Executor system...")
+        await cleanup_executors()
+
+    # Cleanup legacy containers
     await docker_manager.cleanup_all()
 
     # Cleanup temp files
     try:
         import shutil
         shutil.rmtree(settings.temp_dir, ignore_errors=True)
-    except:
+    except Exception:
         pass
 
 # Create FastAPI app
@@ -113,6 +141,14 @@ try:
 except ImportError as e:
     logger.warning(f"Plugin execution API not available: {e}")
 
+# Import and include providers router
+try:
+    from api import providers
+    app.include_router(providers.router)
+    logger.info("Providers API registered")
+except ImportError as e:
+    logger.warning(f"Providers API not available: {e}")
+
 # Exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -135,10 +171,12 @@ async def root():
         "service": "Nadoo Sandbox Service",
         "version": settings.app_version,
         "status": "running",
+        "warm_pool_enabled": settings.warm_pool_enabled,
         "endpoints": {
             "execute": "/api/v1/execute",
+            "providers": "/api/v1/providers",
             "languages": "/api/v1/execute/languages",
-            "health": "/api/v1/execute/health",
+            "health": "/health",
             "metrics": "/metrics" if settings.enable_metrics else None,
             "docs": "/docs" if settings.debug else None,
         }
@@ -154,16 +192,40 @@ async def health():
     try:
         docker_manager.client.ping()
         docker_healthy = True
-    except:
+    except Exception:
         pass
 
+    # Check Executor system
+    executor_healthy = False
+    pool_status = {}
+
+    if settings.warm_pool_enabled:
+        try:
+            available_providers = ExecutorRegistry.get_available_providers()
+            if available_providers:
+                executor = ExecutorRegistry.get()
+                health_status = await executor.health_check()
+                executor_healthy = health_status.healthy
+                pool_status = {
+                    "total": health_status.pool_size,
+                    "available": health_status.available_containers,
+                    "busy": health_status.busy_containers,
+                }
+        except Exception:
+            pass
+
+    overall_healthy = docker_healthy and (executor_healthy if settings.warm_pool_enabled else True)
+
     return {
-        "status": "healthy" if docker_healthy else "degraded",
+        "status": "healthy" if overall_healthy else "degraded",
         "service": "sandbox",
         "version": settings.app_version,
+        "warm_pool_enabled": settings.warm_pool_enabled,
         "checks": {
             "docker": docker_healthy,
-        }
+            "executor": executor_healthy if settings.warm_pool_enabled else None,
+        },
+        "pool": pool_status if settings.warm_pool_enabled else None,
     }
 
 def main():

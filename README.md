@@ -61,39 +61,64 @@ poetry run python -m src.main
 
 - **Multi-language Support**: Execute code in Python, JavaScript, TypeScript, Java, Go, Rust, C++, C#, Ruby, PHP, SQL, and Bash
 - **Secure Execution**: All code runs in isolated Docker containers with resource limits
+- **Warm Pool Architecture**: Pre-warmed containers for ~50-100ms cold start latency
+- **Multi-Provider Support**: Local Docker, AWS Lambda, GCP Cloud Run, Azure Container Apps
 - **Async Execution**: Support for both synchronous and asynchronous code execution
 - **Rate Limiting**: Built-in rate limiting to prevent abuse
 - **Session Management**: Track executions by session
 - **Metrics & Monitoring**: Prometheus metrics and health checks
+- **Auto Failover**: Automatic provider fallback chain for high availability
 
 ## Architecture
 
 ```
-┌─────────────────┐
-│   API Gateway   │
-└────────┬────────┘
-         │
-┌────────▼────────┐
-│  FastAPI App    │
-├─────────────────┤
-│ - Execute API   │
-│ - Health Check  │
-│ - Metrics       │
-└────────┬────────┘
-         │
-┌────────▼────────┐
-│ Docker Manager  │
-├─────────────────┤
-│ - Container     │
-│   Creation      │
-│ - Code Exec     │
-│ - Cleanup       │
-└────────┬────────┘
-         │
-┌────────▼────────┐
-│ Docker Daemon   │
-└─────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                        API Gateway                          │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+┌─────────────────────────────▼───────────────────────────────┐
+│                     FastAPI Application                      │
+├─────────────────────────────────────────────────────────────┤
+│  Execute API  │  Provider API  │  Health Check  │  Metrics  │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+┌─────────────────────────────▼───────────────────────────────┐
+│                   Unified Executor Client                    │
+├─────────────────────────────────────────────────────────────┤
+│              ExecutorRegistry (Fallback Chain)               │
+└───────┬─────────────┬─────────────┬─────────────┬───────────┘
+        │             │             │             │
+┌───────▼───────┐ ┌───▼───┐ ┌───────▼───────┐ ┌───▼───────────┐
+│ Local Docker  │ │  AWS  │ │     GCP       │ │     Azure     │
+│   Executor    │ │Lambda │ │  Cloud Run    │ │Container Apps │
+├───────────────┤ └───────┘ └───────────────┘ └───────────────┘
+│  Warm Pool    │
+│   Manager     │
+├───────────────┤
+│ Health Check  │
+│ & Replenisher │
+└───────┬───────┘
+        │
+┌───────▼───────┐
+│ Docker Daemon │
+└───────────────┘
 ```
+
+### Warm Pool Architecture
+
+Pre-warmed containers eliminate cold start latency:
+
+```
+Container Lifecycle:
+  CREATING → WARM → BUSY → RESETTING → WARM (reuse)
+                              ↓
+                         TERMINATING (TTL/unhealthy)
+```
+
+- **Pool Size**: Configurable per runtime (default: 3)
+- **TTL**: Containers recycled after configurable time (default: 1 hour)
+- **Health Checks**: Background monitoring with auto-replacement
+- **Container Reuse**: Environment reset between executions
 
 ## API Usage Examples
 
@@ -240,13 +265,68 @@ NADOO_SANDBOX_MAX_CPU=0.5
 
 # Redis
 NADOO_SANDBOX_REDIS_URL=redis://localhost:6379/2
+
+# Executor Configuration
+EXECUTOR_DEFAULT_PROVIDER=local_docker
+EXECUTOR_FALLBACK_CHAIN=local_docker,aws_lambda
+EXECUTOR_ENABLE_FALLBACK=true
+
+# Warm Pool Configuration
+WARM_POOL_SIZE_PER_RUNTIME=3
+WARM_POOL_MAX_IDLE_TIME=300
+WARM_POOL_CONTAINER_TTL=3600
+WARM_POOL_HEALTH_CHECK_INTERVAL=30
+
+# AWS Lambda (if using aws provider)
+AWS_REGION=us-east-1
+AWS_LAMBDA_FUNCTION_PREFIX=nadoo-sandbox-
+
+# GCP Cloud Run (if using gcp provider)
+GCP_PROJECT_ID=your-project-id
+GCP_REGION=us-central1
+
+# Azure Container Apps (if using azure provider)
+AZURE_SUBSCRIPTION_ID=your-subscription-id
+AZURE_RESOURCE_GROUP=nadoo-sandbox-rg
+AZURE_LOCATION=eastus
 ```
+
+## Installation
+
+### Basic Installation
+```bash
+# Install core dependencies
+poetry install
+```
+
+### With Cloud Providers
+```bash
+# Install all cloud providers
+poetry install --extras cloud
+
+# Or install specific providers
+poetry install --extras aws      # AWS Lambda support
+poetry install --extras gcp      # GCP Cloud Run support
+poetry install --extras azure    # Azure Container Apps support
+```
+
+### Using pip
+```bash
+# Core only
+pip install -e .
+
+# With cloud providers
+pip install -e ".[cloud]"
+pip install -e ".[aws,gcp,azure]"
+```
+
+---
 
 ## Development
 
 ### Setup
 ```bash
-# Install dependencies
+# Install dependencies with dev tools
 poetry install
 
 # Run locally
@@ -285,6 +365,64 @@ docker run -d \
   nadoo-sandbox:latest
 ```
 
+## Cloud Providers
+
+### Local Docker (Default)
+Uses pre-warmed Docker containers with the Warm Pool architecture for fastest execution.
+
+```python
+from core.executor import UnifiedExecutorClient, ExecutorProvider
+
+client = UnifiedExecutorClient(default_provider=ExecutorProvider.LOCAL_DOCKER)
+result = await client.execute_python("print('Hello!')")
+```
+
+### AWS Lambda
+Serverless execution using AWS Lambda functions.
+
+```python
+client = UnifiedExecutorClient(default_provider=ExecutorProvider.AWS_LAMBDA)
+```
+
+Required: `poetry install --extras aws`
+
+### GCP Cloud Run
+Serverless execution using Google Cloud Run Jobs.
+
+```python
+client = UnifiedExecutorClient(default_provider=ExecutorProvider.GCP_CLOUD_RUN)
+```
+
+Required: `poetry install --extras gcp`
+
+### Azure Container Apps
+Serverless execution using Azure Container Apps Jobs.
+
+```python
+client = UnifiedExecutorClient(default_provider=ExecutorProvider.AZURE_CONTAINER)
+```
+
+Required: `poetry install --extras azure`
+
+### Fallback Chain
+Configure automatic failover between providers:
+
+```python
+from core.executor import ExecutorRegistry, ExecutorProvider
+
+registry = ExecutorRegistry()
+registry.set_fallback_chain([
+    ExecutorProvider.LOCAL_DOCKER,
+    ExecutorProvider.AWS_LAMBDA,
+    ExecutorProvider.GCP_CLOUD_RUN,
+])
+
+# Automatically tries next provider if one fails
+result = await registry.execute_with_fallback(request)
+```
+
+---
+
 ## Security Considerations
 
 1. **Container Isolation**: Each code execution runs in an isolated container
@@ -293,6 +431,7 @@ docker run -d \
 4. **API Authentication**: All endpoints require API key authentication
 5. **Rate Limiting**: Configurable rate limits per API key
 6. **Input Validation**: All inputs are validated before execution
+7. **Warm Pool Security**: Containers reset between executions to prevent data leakage
 
 ## Language-Specific Notes
 

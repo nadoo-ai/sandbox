@@ -3,7 +3,7 @@ Code execution API endpoints
 """
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, List
 from datetime import datetime
 import uuid
 

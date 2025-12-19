@@ -2,7 +2,6 @@
 Tests for the code execution API endpoints
 """
 
-import pytest
 
 
 def test_health_check(client):

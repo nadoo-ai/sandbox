@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 import tempfile
-import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 

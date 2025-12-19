@@ -23,10 +23,39 @@ class Settings(BaseSettings):
     api_key: str = "sandbox-api-key-change-in-production"
     allowed_origins: List[str] = ["http://localhost:3000", "http://localhost:8000"]
 
-    # Docker
+    # Executor Configuration
+    executor_default_provider: str = "local_docker"
+    executor_fallback_enabled: bool = True
+    executor_fallback_chain: str = "local_docker,aws_lambda"
+
+    # Warm Pool Configuration
+    warm_pool_enabled: bool = True
+    warm_pool_size_per_runtime: int = 5
+    warm_pool_max_idle_time: int = 300  # seconds
+    warm_pool_container_ttl: int = 3600  # seconds
+    warm_pool_health_check_interval: int = 30  # seconds
+
+    # Docker (Local Executor)
     docker_socket: str = "unix://var/run/docker.sock"
     docker_network: str = "nadoo_sandbox_network"
     docker_timeout: int = 30
+
+    # AWS Lambda Configuration
+    aws_lambda_enabled: bool = False
+    aws_lambda_region: str = "ap-northeast-2"
+    aws_lambda_function_prefix: str = "nadoo-sandbox"
+
+    # GCP Cloud Run Configuration
+    gcp_cloud_run_enabled: bool = False
+    gcp_project_id: Optional[str] = None
+    gcp_region: str = "asia-northeast3"
+    gcp_job_prefix: str = "nadoo-sandbox"
+
+    # Azure Container Apps Configuration
+    azure_container_enabled: bool = False
+    azure_subscription_id: Optional[str] = None
+    azure_resource_group: Optional[str] = None
+    azure_job_prefix: str = "nadoo-sandbox"
 
     # Execution limits
     max_execution_time: int = 60  # seconds

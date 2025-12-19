@@ -6,7 +6,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import docker
 from docker.errors import DockerException, ImageNotFound, ContainerError
